@@ -389,6 +389,16 @@ table.sup td .sname{font-weight:700;color:var(--ink)}
 .modal-actions .spacer{flex:1}
 .modal-foot{font-size:11.5px;color:var(--muted);margin-top:14px;line-height:1.6}
 .modal-foot code{background:var(--surface);padding:1px 5px;border-radius:4px;font-family:var(--mono);font-size:11px}
+.auth-overlay{background:rgba(15,27,45,.9);z-index:80}
+.auth-card{max-width:380px}
+.auth-brand{display:flex;align-items:center;gap:12px;margin-bottom:18px}
+.auth-brand .mk{width:34px;height:34px;border-radius:9px;flex:0 0 auto;background:linear-gradient(135deg,#1f9d57 0 33%,#e7a30c 33% 66%,#d23b3b 66% 100%)}
+.auth-brand h3{font-size:17px;font-weight:800;color:var(--ink)}
+.auth-brand p{font-size:12.5px;color:var(--muted);margin-top:2px}
+.auth-foot{text-align:center;margin-top:14px}
+.auth-state{font-size:13px;color:var(--text);background:var(--surface);border:1px solid var(--line);border-radius:9px;padding:9px 12px;margin-bottom:14px}
+.auth-state:empty{display:none}
+.auth-state b{color:var(--ink)}
 </style>
 </head>
 <body>
@@ -455,7 +465,8 @@ table.sup td .sname{font-weight:700;color:var(--ink)}
 <div id="cloudModal" class="modal-overlay" hidden>
   <div class="modal">
     <div class="modal-head"><h3>Cloud database</h3><button class="modal-x" id="cloudClose" aria-label="Close">&times;</button></div>
-    <p class="modal-sub">Connect a Supabase project so the whole team shares the same scorecards across devices. Run <b>supabase-setup.sql</b> in your Supabase project first, then paste your credentials below. The anon key is safe to use in the browser.</p>
+    <p class="modal-sub">Connect a Supabase project so the whole team shares the same scorecards across devices. Run <b>supabase-setup.sql</b> in your Supabase project first, then paste your credentials below. The anon key is safe to put here \u2014 your data is protected by sign-in, not by hiding the key.</p>
+    <div id="authState" class="auth-state"></div>
     <label class="modal-field"><span>Project URL</span><input id="cloudUrl" type="text" placeholder="https://YOUR-PROJECT.supabase.co"></label>
     <label class="modal-field"><span>Anon public key</span><input id="cloudKey" type="text" placeholder="eyJhbGciOi..."></label>
     <div id="cloudMsg" class="modal-msg"></div>
@@ -466,6 +477,19 @@ table.sup td .sname{font-weight:700;color:var(--ink)}
       <button class="abtn primary" id="cloudSave">Save &amp; sync</button>
     </div>
     <p class="modal-foot">For a shared deployment you can instead paste these into the <code>SUPABASE_URL</code> / <code>SUPABASE_ANON_KEY</code> constants near the top of this file, so every visitor connects automatically without entering anything.</p>
+  </div>
+</div>
+
+<!-- ============ SIGN-IN OVERLAY ============ -->
+<div id="authModal" class="modal-overlay auth-overlay" hidden>
+  <div class="modal auth-card">
+    <div class="auth-brand"><span class="mk"></span><div><h3>Supplier QA Scorecard</h3><p>Sign in to access the shared database</p></div></div>
+    <label class="modal-field"><span>Email</span><input id="authEmail" type="email" autocomplete="username" placeholder="you@company.com"></label>
+    <label class="modal-field"><span>Password</span><input id="authPass" type="password" autocomplete="current-password" placeholder="Your password"></label>
+    <div id="authMsg" class="modal-msg"></div>
+    <button class="abtn primary" id="authSignIn" style="width:100%;justify-content:center">Sign in</button>
+    <p class="auth-foot"><button class="linkbtn" id="authOffline">Use offline on this device only</button></p>
+    <p class="modal-foot">Accounts are created by your administrator in Supabase (Authentication &rarr; Users). There is no public sign-up.</p>
   </div>
 </div>
 
@@ -486,10 +510,20 @@ table.sup td .sname{font-weight:700;color:var(--ink)}
    You can also set these at runtime via the "Cloud" button —
    those runtime values take precedence over the constants here.
    ============================================================ */
-var SUPABASE_URL      = "https://zfpnstacxwieooayrnoo.supabase.co";  
-var SUPABASE_ANON_KEY = "sb_publishable_EQjzahCsZx7Am0jggH-gYw_H6YHE3xd";
+var SUPABASE_URL      = "https://zfpnstacxwieooayrnoo.supabase.co";
+var SUPABASE_ANON_KEY = "sb_publishable_EQjzahCsZx7Am0jggH-gYw_H6YHE3xd"; 
 var CLOUD_TABLE = "scorecards";
+var STORAGE_BUCKET = "evidence";   // Supabase Storage bucket for photos (created by supabase-setup.sql)
 var CLOUD_LS = "supplier_qa_cloud_cfg";
+
+/* ---- Approved supplier list (edit here to add/remove suppliers) ---- */
+var SUPPLIERS = [
+  "Ceylon Detergent Industries Limited",
+  "RP Industries Limited",
+  "Hesperus Naturella Limited",
+  "PR Industries - Minuwangoda",
+  "PR Industries - Ragama"
+];
 
 function cloudCfg(){
   try{ var o=JSON.parse(localStorage.getItem(CLOUD_LS)||"null"); if(o&&o.url&&o.key) return {url:String(o.url).replace(/\/+$/,""), key:o.key}; }catch(e){}
@@ -497,10 +531,15 @@ function cloudCfg(){
   return null;
 }
 function cloudConfigured(){ return !!cloudCfg(); }
-function cloudHeaders(cfg, extra){ var h={ "apikey":cfg.key, "Authorization":"Bearer "+cfg.key, "Content-Type":"application/json" }; if(extra){ for(var k in extra) h[k]=extra[k]; } return h; }
+function cloudHeaders(cfg, extra){ var h={ "apikey":cfg.key, "Authorization":"Bearer "+bearerToken(cfg), "Content-Type":"application/json" }; if(extra){ for(var k in extra) h[k]=extra[k]; } return h; }
 function cloudList(){ var cfg=cloudCfg(); if(!cfg) return Promise.resolve(null);
-  return fetch(cfg.url+"/rest/v1/"+CLOUD_TABLE+"?select=id,supplier,month,ts,data&order=ts.desc", {headers:cloudHeaders(cfg)})
-    .then(function(r){ if(!r.ok) throw new Error("list "+r.status); return r.json(); });
+  var all=[], pageSize=1000;
+  function page(offset){
+    return fetch(cfg.url+"/rest/v1/"+CLOUD_TABLE+"?select=id,supplier,month,ts,data&order=ts.desc&limit="+pageSize+"&offset="+offset, {headers:cloudHeaders(cfg)})
+      .then(function(r){ if(!r.ok) throw new Error("list "+r.status); return r.json(); })
+      .then(function(rows){ rows=rows||[]; all=all.concat(rows); if(rows.length===pageSize && offset+pageSize<50000) return page(offset+pageSize); return all; });
+  }
+  return page(0);
 }
 function cloudUpsert(rec){ var cfg=cloudCfg(); if(!cfg) return Promise.resolve(null);
   var row={ id:rec.id, supplier:rec.supplier, month:rec.month, ts:rec.ts, data:rec.data };
@@ -511,6 +550,65 @@ function cloudDelete(id){ var cfg=cloudCfg(); if(!cfg) return Promise.resolve(nu
   return fetch(cfg.url+"/rest/v1/"+CLOUD_TABLE+"?id=eq."+encodeURIComponent(id), {method:"DELETE", headers:cloudHeaders(cfg,{"Prefer":"return=minimal"})})
     .then(function(r){ if(!r.ok && r.status!==404) throw new Error("delete "+r.status); });
 }
+
+/* ---- Supabase Storage: upload photos and keep only their URL in the record ---- */
+function dataURLtoBlob(dataurl){
+  var parts=dataurl.split(","), mime=(parts[0].match(/:(.*?);/)||[])[1]||"image/jpeg";
+  var bin=atob(parts[1]||""), n=bin.length, u8=new Uint8Array(n);
+  while(n--) u8[n]=bin.charCodeAt(n);
+  return new Blob([u8],{type:mime});
+}
+function isDataUrl(s){ return typeof s==="string" && s.indexOf("data:")===0; }
+/* uploads a base64 data URL to Storage and resolves to its public URL.
+   For anything that isn't a data URL (already a URL, or empty) it resolves unchanged. */
+function storageUpload(dataUrl){
+  var cfg=cloudCfg();
+  if(!cfg || !isDataUrl(dataUrl)) return Promise.resolve(dataUrl);
+  var blob; try{ blob=dataURLtoBlob(dataUrl); }catch(e){ return Promise.resolve(dataUrl); }
+  var ext = blob.type.indexOf("png")>=0?"png":blob.type.indexOf("webp")>=0?"webp":"jpg";
+  var path = Date.now().toString(36)+"-"+Math.random().toString(36).slice(2,9)+"."+ext;
+  return fetch(cfg.url+"/storage/v1/object/"+STORAGE_BUCKET+"/"+path, {
+    method:"POST",
+    headers:{ "apikey":cfg.key, "Authorization":"Bearer "+bearerToken(cfg), "Content-Type":blob.type, "x-upsert":"true" },
+    body: blob
+  }).then(function(r){ if(!r.ok) throw new Error("upload "+r.status); return cfg.url+"/storage/v1/object/public/"+STORAGE_BUCKET+"/"+path; });
+}
+
+/* ============================================================
+   AUTHENTICATION (Supabase Auth)
+   Locks the shared database to signed-in users. The anon key in
+   this file cannot be hidden in a browser app — the browser must
+   send it — and that's expected: security comes from the database
+   only allowing the "authenticated" role (see supabase-setup.sql),
+   so the anon key alone can do nothing.
+   ============================================================ */
+var AUTH_LS = "supplier_qa_auth";
+var offlineMode = false;   // user chose to work locally without signing in
+
+function authGet(){ try{ return JSON.parse(localStorage.getItem(AUTH_LS)||"null"); }catch(e){ return null; } }
+function authSet(s){ try{ localStorage.setItem(AUTH_LS, JSON.stringify(s)); }catch(e){} }
+function authClear(){ try{ localStorage.removeItem(AUTH_LS); }catch(e){} }
+function authEmail(){ var s=authGet(); return (s&&s.email)||""; }
+function authValid(){ var s=authGet(); return !!(s && s.access_token && s.expires_at && (s.expires_at*1000) > (Date.now()+5000)); }
+function bearerToken(cfg){ var s=authGet(); return (s && s.access_token) ? s.access_token : cfg.key; }
+function saveSession(j, fallbackEmail){ authSet({ access_token:j.access_token, refresh_token:j.refresh_token, expires_at:(j.expires_at||(Math.floor(Date.now()/1000)+(j.expires_in||3600))), email:(j.user&&j.user.email)||fallbackEmail }); }
+
+function signIn(email,password){
+  var cfg=cloudCfg(); if(!cfg) return Promise.reject(new Error("Connect a Supabase project first (Cloud button)."));
+  return fetch(cfg.url+"/auth/v1/token?grant_type=password",{ method:"POST", headers:{ "apikey":cfg.key, "Content-Type":"application/json" }, body:JSON.stringify({email:email,password:password}) })
+    .then(function(r){ return r.json().then(function(j){ if(!r.ok) throw new Error(j.error_description||j.msg||j.error||("Sign-in failed ("+r.status+")")); return j; }); })
+    .then(function(j){ if(!j.access_token) throw new Error("Sign-in failed."); saveSession(j,email); return true; });
+}
+function refreshSession(){
+  var cfg=cloudCfg(), s=authGet(); if(!cfg || !s || !s.refresh_token) return Promise.reject(new Error("no refresh token"));
+  return fetch(cfg.url+"/auth/v1/token?grant_type=refresh_token",{ method:"POST", headers:{ "apikey":cfg.key, "Content-Type":"application/json" }, body:JSON.stringify({refresh_token:s.refresh_token}) })
+    .then(function(r){ if(!r.ok) throw new Error("refresh "+r.status); return r.json(); })
+    .then(function(j){ if(!j.access_token) throw new Error("refresh failed"); saveSession(j, s.email); return true; });
+}
+function ensureAuth(){ if(authValid()) return Promise.resolve(true); var s=authGet(); if(s && s.refresh_token) return refreshSession(); return Promise.reject(new Error("not signed in")); }
+function withAuth(){ if(!cloudConfigured()) return Promise.resolve(false); return ensureAuth().then(function(){return true;}, function(){return false;}); }
+function signOut(){ var cfg=cloudCfg(), s=authGet(); if(cfg && s && s.access_token){ fetch(cfg.url+"/auth/v1/logout",{method:"POST",headers:{ "apikey":cfg.key, "Authorization":"Bearer "+s.access_token }}).catch(function(){}); } authClear(); updateAuthUI(); updateCloudStatus(); showLogin(); }
+function authError(){ authClear(); updateAuthUI(); updateCloudStatus("auth"); showLogin(); }
 
 /* ---------------- scoring framework (from the QA scoring matrix) ---------------- */
 var RATING = [0,2,4,6,8];                 // band index -> rating on the 0–8 scale
@@ -634,16 +732,28 @@ function readImage(file, cb){
   fr.onload=function(){
     var img=new Image();
     img.onload=function(){
-      var max=1200, w=img.width, h=img.height;
+      var max=1024, w=img.width, h=img.height;
       if(w>max||h>max){ var r=Math.min(max/w,max/h); w=Math.round(w*r); h=Math.round(h*r); }
       var cv=document.createElement("canvas"); cv.width=w; cv.height=h;
       cv.getContext("2d").drawImage(img,0,0,w,h);
-      try{ cb(cv.toDataURL("image/jpeg",0.82)); }catch(e){ cb(fr.result); }
+      try{ cb(cv.toDataURL("image/jpeg",0.7)); }catch(e){ cb(fr.result); }
     };
     img.onerror=function(){ cb(fr.result); };
     img.src=fr.result;
   };
   fr.readAsDataURL(file);
+}
+
+/* true only if the user actually entered escalation details (so we don't
+   print a blank Supplier Escalation Notice on an un-filled card) */
+function escFilled(e){
+  if(!e) return false;
+  if((e.ncr||"").trim() || (e.recurring||"").trim() || (e.financial||"").trim() || (e.problem||"").trim()) return true;
+  if(e.defect) return true;
+  if(e.issue && (e.issue.quality||e.issue.delivery||e.issue.compliance||e.issue.oos)) return true;
+  if(e.restrict && (e.restrict.shipping||e.restrict.hold||(e.restrict.other||"").trim())) return true;
+  if(e.actions && e.actions.some(function(a){ return (a.due||"").trim(); })) return true;
+  return false;
 }
 
 /* ---------------- steps ---------------- */
@@ -719,7 +829,7 @@ function infoPanel(){
   var m=state.meta;
   return '<div class="panel-head"><h2>Supplier &amp; period</h2><p>Who is being evaluated, and for which month.</p></div>'
   +'<div class="cardbox"><div class="grid2">'
-  + fieldText("Supplier name","meta.supplier",m.supplier,"e.g. Acme Packaging (Pvt) Ltd")
+  + fieldSelect("Supplier","meta.supplier",m.supplier,SUPPLIERS,"Select supplier\u2026")
   + fieldText("Site / location","meta.site",m.site,"e.g. Biyagama plant")
   + fieldText("Material / category","meta.material",m.material,"e.g. Folding cartons (optional)")
   + field('<label for="f-month">Evaluation month</label><input type="month" id="f-month" data-field="meta.month" value="'+esc(m.month)+'">')
@@ -732,6 +842,13 @@ function infoPanel(){
 function fieldText(label,path,val,ph){
   var id="f-"+path.replace(/\./g,"-");
   return field('<label for="'+id+'">'+esc(label)+'</label><input type="text" id="'+id+'" data-field="'+path+'" value="'+esc(val)+'" placeholder="'+esc(ph)+'">');
+}
+function fieldSelect(label,path,val,options,placeholder){
+  var id="f-"+path.replace(/\./g,"-");
+  var opts='<option value=""'+(val?"":" selected")+'>'+esc(placeholder||"Select\u2026")+'</option>';
+  if(val && options.indexOf(val)<0) opts+='<option value="'+esc(val)+'" selected>'+esc(val)+' (not in list)</option>';   // keep legacy/typo'd names so they aren't silently lost
+  options.forEach(function(o){ opts+='<option value="'+esc(o)+'"'+(o===val?" selected":"")+'>'+esc(o)+'</option>'; });
+  return field('<label for="'+id+'">'+esc(label)+'</label><select id="'+id+'" data-field="'+path+'">'+opts+'</select>');
 }
 function field(inner){ return '<div class="field">'+inner+'</div>'; }
 
@@ -911,10 +1028,10 @@ function renderReport(){
 
   var obs = state.overall.trim() ? '<div class="rep-section"><h3>Observations &amp; next steps</h3><div class="rep-obs">'+esc(state.overall)+'</div></div>' : '';
 
-  // escalation notice (yellow/red only)
+  // escalation notice — only when the card is yellow/red AND the user filled it in
   var notice="";
-  if(fc.key!=="green"){
-    var e=state.esc;
+  var e=state.esc;
+  if(fc.key!=="green" && escFilled(e)){
     var itags=[["quality","Quality"],["delivery","Delivery"],["compliance","Compliance"],["oos","Out of stock"]]
       .map(function(it){ return '<span class="itag '+(e.issue[it[0]]?"on":"")+'">'+esc(it[1])+'</span>'; }).join("");
     var arows=e.actions.filter(function(a){return (a.action||a.owner||a.due);}).map(function(a){
@@ -1010,7 +1127,12 @@ function loadRecords(){
 }
 
 /* reference numbers: incremental per supplier, e.g. ACM-001, ACM-002, ... */
-function supplierCode(name){ var s=(name||"").toUpperCase().replace(/[^A-Z0-9]/g,""); return s? s.slice(0,3) : "SUP"; }
+function supplierCode(name){
+  var clean=(name||"").toUpperCase().replace(/[^A-Z0-9]+/g," ").trim();
+  if(!clean) return "SUP";
+  var initials=clean.split(" ").map(function(w){return w.charAt(0);}).join("");   // e.g. "PR Industries - Ragama" -> "PIR"
+  return initials.length>=2 ? initials.slice(0,4) : clean.replace(/ /g,"").slice(0,3);
+}
 function nextRef(name){
   var key=(name||"").trim().toLowerCase(), max=0;
   RECORDS.forEach(function(r){
@@ -1022,6 +1144,23 @@ function nextRef(name){
   return supplierCode(name)+"-"+("000"+(max+1)).slice(-3);
 }
 
+function uploadStateImages(btn){
+  if(!cloudConfigured()) return Promise.resolve();
+  var tasks=[];
+  state.evidence.forEach(function(ev){ if(isDataUrl(ev.data)) tasks.push({get:function(){return ev.data;}, set:function(u){ev.data=u;}}); });
+  if(isDataUrl(state.esc.defect)) tasks.push({get:function(){return state.esc.defect;}, set:function(u){state.esc.defect=u;}});
+  if(!tasks.length) return Promise.resolve();
+  if(btn){ btn.disabled=true; btn.innerHTML="Uploading\u2026"; }
+  var i=0;
+  return new Promise(function(resolve){
+    (function next(){
+      if(i>=tasks.length){ if(btn) btn.disabled=false; resolve(); return; }
+      var t=tasks[i++];
+      storageUpload(t.get()).then(function(u){ t.set(u); }, function(){ /* upload failed -> keep image inline */ }).then(next);
+    })();
+  });
+}
+
 function saveCurrent(){
   if(!state.meta.supplier.trim()){ alert("Add a supplier name before saving."); return; }
   var id=(state.meta.supplier+"|"+state.meta.month).toLowerCase();
@@ -1030,13 +1169,19 @@ function saveCurrent(){
     if(ex && ex.data && ex.data.meta && ex.data.meta.ref) state.meta.ref=ex.data.meta.ref;      // re-saving same month -> keep its ref
     else if(!String(state.meta.ref||"").trim()) state.meta.ref=nextRef(state.meta.supplier);     // new -> next in this supplier's sequence
   }
-  var rec={ id:id, supplier:state.meta.supplier, month:state.meta.month, ts:Date.now(), data:JSON.parse(JSON.stringify(state)) };
-  var i=RECORDS.findIndex(function(r){return r.id===id;});
-  if(i>=0) RECORDS[i]=rec; else RECORDS.unshift(rec);
   var btn=el("btnSave");
-  persistPut(rec).then(function(){ renderSaved(); if(document.body.classList.contains("dashboard-view")) renderDashboard(); flash(btn,"Saved \u2713"); })
-    .catch(function(){ alert("Couldn't save to storage on this device. Use Export JSON to keep a copy."); });
-  if(cloudConfigured()){ updateCloudStatus("syncing"); cloudUpsert(rec).then(function(){ updateCloudStatus("ok"); }).catch(function(){ updateCloudStatus("error"); }); }
+  // only push to the cloud (and upload photos) when signed in; otherwise save locally
+  withAuth().then(function(authed){
+    (authed ? uploadStateImages(btn) : Promise.resolve()).then(function(){
+      var rec={ id:id, supplier:state.meta.supplier, month:state.meta.month, ts:Date.now(), data:JSON.parse(JSON.stringify(state)) };
+      var i=RECORDS.findIndex(function(r){return r.id===id;});
+      if(i>=0) RECORDS[i]=rec; else RECORDS.unshift(rec);
+      persistPut(rec).then(function(){ renderSaved(); if(document.body.classList.contains("dashboard-view")) renderDashboard(); flash(btn,"Saved \u2713"); })
+        .catch(function(){ alert("Couldn't save to storage on this device. Use Export JSON to keep a copy."); });
+      if(authed){ updateCloudStatus("syncing"); cloudUpsert(rec).then(function(){ updateCloudStatus("ok"); }).catch(function(){ if(!authValid()) authError(); else updateCloudStatus("error"); }); }
+      else if(cloudConfigured()){ updateCloudStatus("auth"); }
+    });
+  });
 }
 function flash(btn,txt){ var o=btn.innerHTML; btn.innerHTML=txt; setTimeout(function(){btn.innerHTML=o;},1400); }
 function renderSaved(){
@@ -1047,44 +1192,61 @@ function renderSaved(){
   }).join("") : '<div class="menu-empty">No saved evaluations yet.</div>';
 }
 function loadRec(id){ var r=lsGet().find(function(x){return x.id===id;}); if(!r)return; state=JSON.parse(JSON.stringify(r.data)); if(state.step==null)state.step=0; if(state.meta) state.meta.refAuto=false; el("savedMenu").classList.remove("open"); document.body.classList.remove("dashboard-view"); renderAll(); }
-function delRec(id){ if(!confirm("Delete this saved evaluation?"))return; RECORDS=RECORDS.filter(function(x){return x.id!==id;}); persistDelete(id).then(function(){ renderSaved(); if(document.body.classList.contains("dashboard-view")) renderDashboard(); }); if(cloudConfigured()){ cloudDelete(id).then(function(){ updateCloudStatus("ok"); }).catch(function(){ updateCloudStatus("error"); }); } }
+function delRec(id){ if(!confirm("Delete this saved evaluation?"))return; RECORDS=RECORDS.filter(function(x){return x.id!==id;}); persistDelete(id).then(function(){ renderSaved(); if(document.body.classList.contains("dashboard-view")) renderDashboard(); }); withAuth().then(function(authed){ if(authed){ cloudDelete(id).then(function(){ updateCloudStatus("ok"); }).catch(function(){ if(!authValid()) authError(); else updateCloudStatus("error"); }); } }); }
+
+/* run an async fn over items ONE AT A TIME (avoids hammering Supabase with
+   many concurrent requests, which can silently drop some); tolerant of
+   individual failures. Returns {ok, fail}. */
+function seqRun(items, fn){
+  var i=0, ok=0, fail=0;
+  return new Promise(function(resolve){
+    (function next(){
+      if(i>=items.length){ resolve({ok:ok,fail:fail}); return; }
+      var it=items[i++];
+      Promise.resolve().then(function(){ return fn(it); })
+        .then(function(){ ok++; }, function(){ fail++; })
+        .then(next);
+    })();
+  });
+}
 
 /* two-way sync: pull cloud rows newer than local, push local rows newer than cloud */
 function cloudSync(){
   var cfg=cloudCfg();
   if(!cfg){ updateCloudStatus("off"); return Promise.resolve(); }
-  updateCloudStatus("syncing");
-  return cloudList().then(function(rows){
-    if(!rows) return;
-    var cloudById={};
-    var jobs=[];
-    rows.forEach(function(row){
-      cloudById[row.id]=row;
-      var i=RECORDS.findIndex(function(x){return x.id===row.id;});
-      var local=i>=0?RECORDS[i]:null;
-      if(!local || (row.ts||0) > (local.ts||0)){
-        var rec={ id:row.id, supplier:row.supplier, month:row.month, ts:row.ts, data:row.data };
-        if(i>=0) RECORDS[i]=rec; else RECORDS.push(rec);
-        jobs.push(persistPut(rec));               // cache cloud copy locally for offline use
-      }
-    });
-    RECORDS.forEach(function(r){
-      var c=cloudById[r.id];
-      if(!c || (r.ts||0) > (c.ts||0)) jobs.push(cloudUpsert(r));   // push local-only / locally-newer records up
-    });
-    return Promise.all(jobs);
-  }).then(function(){
-    RECORDS.sort(function(a,b){ return (b.ts||0)-(a.ts||0); });
-    renderSaved(); if(document.body.classList.contains("dashboard-view")) renderDashboard();
-    updateCloudStatus("ok");
-  }).catch(function(e){ updateCloudStatus("error"); throw e; });
+  if(offlineMode){ updateCloudStatus("auth"); return Promise.resolve(); }
+  return ensureAuth().then(function(){
+    updateCloudStatus("syncing");
+    return cloudList().then(function(rows){
+      rows=rows||[];
+      var cloudById={}, toCacheLocal=[];
+      rows.forEach(function(row){
+        cloudById[row.id]=row;
+        var i=RECORDS.findIndex(function(x){return x.id===row.id;});
+        var local=i>=0?RECORDS[i]:null;
+        if(!local || (+row.ts||0) > (+local.ts||0)){
+          var rec={ id:row.id, supplier:row.supplier, month:row.month, ts:(+row.ts||0), data:row.data };
+          if(i>=0) RECORDS[i]=rec; else RECORDS.push(rec);
+          toCacheLocal.push(rec);
+        }
+      });
+      var toPush=RECORDS.filter(function(r){ var c=cloudById[r.id]; return !c || (+r.ts||0) > (+c.ts||0); });
+      return seqRun(toCacheLocal, function(rec){ return persistPut(rec); })
+        .then(function(){ return seqRun(toPush, function(rec){ return cloudUpsert(rec); }); });
+    }).then(function(res){
+      RECORDS.sort(function(a,b){ return (b.ts||0)-(a.ts||0); });
+      renderSaved(); if(document.body.classList.contains("dashboard-view")) renderDashboard();
+      updateCloudStatus((res && res.fail)? "partial" : "ok");
+      return res;
+    }).catch(function(e){ if(!authValid()){ authError(); } else { updateCloudStatus("error"); } throw e; });
+  }, function(){ updateCloudStatus("auth"); showLogin(); });
 }
 
 function updateCloudStatus(stateStr){
   var dot=el("cloudDot"), lab=el("cloudLab");
   if(!dot||!lab) return;
-  var s = stateStr || (cloudConfigured()? "idle" : "off");
-  var map={ off:["#7e8aa0","Local only"], idle:["#9fb0c3","Cloud ready"], syncing:["#e7a30c","Syncing\u2026"], ok:["#1f9d57","Synced"], error:["#d23b3b","Sync error"] };
+  var s = stateStr || (cloudConfigured()? (authValid()? "idle" : "auth") : "off");
+  var map={ off:["#7e8aa0","Local only"], idle:["#9fb0c3","Cloud ready"], auth:["#e7a30c","Sign in to sync"], syncing:["#e7a30c","Syncing\u2026"], ok:["#1f9d57","Synced"], partial:["#e7a30c","Partly synced"], error:["#d23b3b","Sync error"] };
   var m=map[s]||map.off;
   dot.style.background=m[0]; lab.textContent=m[1];
 }
@@ -1353,10 +1515,21 @@ function cloudModalMsg(txt,ok){ var m=el("cloudMsg"); m.textContent=txt; m.class
 function saveCloudCfg(){ var url=el("cloudUrl").value.trim(), key=el("cloudKey").value.trim(); if(!url||!key){ cloudModalMsg("Enter both the project URL and the anon key.",false); return false; } if(!/^https?:\/\//.test(url)){ cloudModalMsg("The project URL should start with https://",false); return false; } try{ localStorage.setItem(CLOUD_LS, JSON.stringify({url:url, key:key})); }catch(e){} return true; }
 el("btnCloud").addEventListener("click",function(){ var c=cloudCfg(); el("cloudUrl").value=(c&&c.url)||""; el("cloudKey").value=(c&&c.key)||""; cloudModalMsg(""); el("cloudModal").hidden=false; });
 el("cloudClose").addEventListener("click",function(){ el("cloudModal").hidden=true; });
-el("cloudModal").addEventListener("click",function(e){ if(e.target.id==="cloudModal") el("cloudModal").hidden=true; });
-el("cloudTest").addEventListener("click",function(){ if(!saveCloudCfg())return; cloudModalMsg("Testing\u2026"); cloudList().then(function(rows){ cloudModalMsg("Connected \u2014 "+(rows?rows.length:0)+" record(s) in the cloud.",true); updateCloudStatus("ok"); }).catch(function(){ cloudModalMsg("Couldn't connect. Check the URL/key, and that the table and policies exist (run supabase-setup.sql).",false); updateCloudStatus("error"); }); });
-el("cloudSave").addEventListener("click",function(){ if(!saveCloudCfg())return; cloudModalMsg("Syncing\u2026"); cloudSync().then(function(){ cloudModalMsg("Saved and synced. Your data is now shared via the cloud.",true); setTimeout(function(){ el("cloudModal").hidden=true; },800); }).catch(function(){ cloudModalMsg("Saved, but the sync failed. Check the URL/key and that the table exists.",false); }); });
-el("cloudDisconnect").addEventListener("click",function(){ try{ localStorage.removeItem(CLOUD_LS); }catch(e){} el("cloudUrl").value=""; el("cloudKey").value=""; cloudModalMsg("Disconnected. This device now uses local storage only.",true); updateCloudStatus(); });
+el("cloudModal").addEventListener("click",function(e){ if(e.target.id==="cloudSignOut"){ signOut(); return; } if(e.target.id==="cloudSignIn"){ el("cloudModal").hidden=true; showLogin(); return; } if(e.target.id==="cloudModal") el("cloudModal").hidden=true; });
+el("cloudTest").addEventListener("click",function(){ if(!saveCloudCfg())return; cloudModalMsg("Testing\u2026"); var cfg=cloudCfg(); fetch(cfg.url+"/auth/v1/settings",{headers:{ "apikey":cfg.key }}).then(function(r){ if(!r.ok) throw new Error("bad"); cloudModalMsg("Project URL & key look valid. Now sign in to sync.",true); updateAuthUI(); }).catch(function(){ cloudModalMsg("Couldn't reach the project. Check the URL and anon key.",false); }); });
+el("cloudSave").addEventListener("click",function(){ if(!saveCloudCfg())return; offlineMode=false; el("cloudModal").hidden=true; updateAuthUI(); updateCloudStatus(); if(authValid()){ cloudSync().catch(function(){}); } else { showLogin(); } });
+el("cloudDisconnect").addEventListener("click",function(){ try{ localStorage.removeItem(CLOUD_LS); }catch(e){} authClear(); el("cloudUrl").value=""; el("cloudKey").value=""; cloudModalMsg("Disconnected. This device now uses local storage only.",true); updateAuthUI(); updateCloudStatus(); });
+
+/* ---- sign-in overlay ---- */
+function authMsg(t,ok){ var e=el("authMsg"); if(!e)return; e.textContent=t||""; e.className="modal-msg"+(ok===true?" ok":ok===false?" err":""); }
+function showLogin(){ if(!cloudConfigured()) return; var m=el("authModal"); if(!m)return; el("authEmail").value=authEmail()||""; el("authPass").value=""; authMsg(""); m.hidden=false; setTimeout(function(){ try{ (authEmail()?el("authPass"):el("authEmail")).focus(); }catch(e){} },50); }
+function hideLogin(){ var m=el("authModal"); if(m) m.hidden=true; }
+function updateAuthUI(){ var w=el("authState"); if(!w)return; if(!cloudConfigured()){ w.innerHTML=""; return; } if(authValid()){ w.innerHTML='Signed in as <b>'+esc(authEmail())+'</b> &middot; <button class="linkbtn" id="cloudSignOut">Sign out</button>'; } else { w.innerHTML='Not signed in &middot; <button class="linkbtn" id="cloudSignIn">Sign in</button>'; } }
+function doSignIn(){ var em=el("authEmail").value.trim(), pw=el("authPass").value; if(!em||!pw){ authMsg("Enter your email and password.",false); return; } var b=el("authSignIn"), o=b.innerHTML; b.disabled=true; b.innerHTML="Signing in\u2026"; authMsg(""); signIn(em,pw).then(function(){ b.disabled=false; b.innerHTML=o; offlineMode=false; hideLogin(); updateAuthUI(); updateCloudStatus(); cloudSync().catch(function(){}); }).catch(function(err){ b.disabled=false; b.innerHTML=o; authMsg((err&&err.message)||"Sign-in failed.",false); }); }
+el("authSignIn").addEventListener("click",doSignIn);
+el("authPass").addEventListener("keydown",function(e){ if(e.key==="Enter") doSignIn(); });
+el("authEmail").addEventListener("keydown",function(e){ if(e.key==="Enter") doSignIn(); });
+el("authOffline").addEventListener("click",function(){ offlineMode=true; hideLogin(); updateCloudStatus("auth"); });
 el("dashboard").addEventListener("click",function(e){
   var t=e.target, b;
   if((b=t.closest("[data-dash]"))){ var to=b.dataset.dash; if(to==="editor"){ document.body.classList.remove("dashboard-view"); window.scrollTo(0,0); } else if(to==="home"){ dash.view="home"; dash.supplier=null; renderDashboard(); window.scrollTo(0,0); } return; }
@@ -1370,7 +1543,16 @@ el("dashboard").addEventListener("input",function(e){ if(e.target.id==="dashSear
 
 /* boot */
 renderAll();
-loadRecords().then(function(){ renderSaved(); if(document.body.classList.contains("dashboard-view")) renderDashboard(); updateCloudStatus(); cloudSync().catch(function(){}); });
+loadRecords().then(function(){
+  renderSaved(); if(document.body.classList.contains("dashboard-view")) renderDashboard();
+  updateAuthUI();
+  if(cloudConfigured()){
+    ensureAuth().then(
+      function(){ updateCloudStatus(); updateAuthUI(); cloudSync().catch(function(){}); },
+      function(){ updateCloudStatus("auth"); updateAuthUI(); showLogin(); }
+    );
+  } else { updateCloudStatus(); }
+});
 </script>
 </body>
 </html>
