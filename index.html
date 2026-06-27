@@ -510,8 +510,8 @@ table.sup td .sname{font-weight:700;color:var(--ink)}
    You can also set these at runtime via the "Cloud" button —
    those runtime values take precedence over the constants here.
    ============================================================ */
-var SUPABASE_URL      = "https://zfpnstacxwieooayrnoo.supabase.co";
-var SUPABASE_ANON_KEY = "sb_publishable_EQjzahCsZx7Am0jggH-gYw_H6YHE3xd"; 
+var SUPABASE_URL      = "";   // e.g. "https://abcdefgh.supabase.co"
+var SUPABASE_ANON_KEY = "";   // e.g. "eyJhbGciOi...."  (anon public key)
 var CLOUD_TABLE = "scorecards";
 var STORAGE_BUCKET = "evidence";   // Supabase Storage bucket for photos (created by supabase-setup.sql)
 var CLOUD_LS = "supplier_qa_cloud_cfg";
@@ -610,31 +610,30 @@ function withAuth(){ if(!cloudConfigured()) return Promise.resolve(false); retur
 function signOut(){ var cfg=cloudCfg(), s=authGet(); if(cfg && s && s.access_token){ fetch(cfg.url+"/auth/v1/logout",{method:"POST",headers:{ "apikey":cfg.key, "Authorization":"Bearer "+s.access_token }}).catch(function(){}); } authClear(); updateAuthUI(); updateCloudStatus(); showLogin(); }
 function authError(){ authClear(); updateAuthUI(); updateCloudStatus("auth"); showLogin(); }
 
-/* ---------------- scoring framework (from the QA scoring matrix) ---------------- */
-var RATING = [0,2,4,6,8];                 // band index -> rating on the 0–8 scale
-var SCALE  = ["Very poor","Poor","Average","Good","Excellent"];
+/* ---------------- scoring framework (from the new Supplier Quality Performance Matrix) ----------------
+   Each indicator carries its own bands as {label, mark}. The mark is awarded directly
+   (no fixed formula), so criteria can have any number of bands. Per the matrix weightage,
+   the maximum of each indicator equals its Weight column; the maxima sum to 100.            */
 var CRITERIA = [
   { cat:"Product Quality", items:[
-    { id:"pq1", name:"Defect rate (reject qty \u00F7 total received)", max:20,
-      bands:[">5%","3\u20135%","2\u20133%","1\u20132%","<1%"] },
-    { id:"pq2", name:"Critical GMP violation (foreign bodies, pest)", max:10, critical:true,
-      bands:["Violation found","","","","Zero findings"] }
+    { id:"defect", name:"Defect rate %", max:10,
+      bands:[{label:">5%",mark:0},{label:"3\u20135%",mark:2.5},{label:"2\u20133%",mark:5},{label:"1\u20132%",mark:7.5},{label:"<1%",mark:10}] },
+    { id:"severity", name:"Severity of defect", max:20,
+      bands:[{label:"Critical",mark:0},{label:"Major",mark:10},{label:"Minor",mark:20}] }
   ]},
-  { cat:"Process Quality", items:[
-    { id:"pc1", name:"Out-of-stock due to quality defect", max:10,
-      bands:[">3","3","2","1","0"] },
-    { id:"pc2", name:"Transport condition (packaging, contamination, traceability, palletization)", max:10,
-      bands:["Multiple","Major","Moderate","Minor","Zero findings"] },
-    { id:"pc3", name:"Repetitive / recurring NCRs", max:20, recurring:true,
-      bands:[">3","3","2","1","0"] }
+  { cat:"Delivery & Service", items:[
+    { id:"otif", name:"OTIF (on time, in full)", max:30,
+      bands:[{label:"Below 90%",mark:0},{label:"90\u201395%",mark:10},{label:"95\u201398%",mark:20},{label:"98\u201399%",mark:25},{label:"100%",mark:30}] },
+    { id:"ncrtime", name:"NCR closure timeline", max:5,
+      bands:[{label:">10 days",mark:0},{label:"<10 days",mark:5}] }
   ]},
-  { cat:"NCR Effectiveness", items:[
-    { id:"ne1", name:"Avg. time for NCR feedback & effectiveness", max:10,
-      bands:[">14 days","12\u201314 days","10\u201312 days","7\u201310 days","1\u20137 days"] },
-    { id:"ne2", name:"NCR action closing rate (closed \u00F7 total)", max:10,
-      bands:["<60%","60\u201369%","70\u201379%","80\u201399%","100%"] },
-    { id:"ne3", name:"Consumer-complaint closing rate", max:10,
-      bands:["<60%","60\u201369%","70\u201379%","80\u201399%","100%"] }
+  { cat:"Compliance & NCRs", items:[
+    { id:"repeat", name:"Repeat NCRs", max:15,
+      bands:[{label:"Repeat NCR(s) present",mark:0},{label:"No repeat NCRs",mark:15}] },
+    { id:"audit", name:"Annual audit score", max:10,
+      bands:[{label:"<80",mark:0},{label:"80\u201385",mark:4},{label:"85\u201390",mark:6},{label:"90\u201395",mark:8},{label:">95",mark:10}] },
+    { id:"escard", name:"Red / Yellow card escalations", max:10,
+      bands:[{label:"Red card issued",mark:0},{label:"Yellow card issued",mark:3},{label:"No card",mark:10}] }
   ]}
 ];
 var ITEM_BY_ID = {}; CRITERIA.forEach(function(c){ c.items.forEach(function(it){ it.cat=c.cat; ITEM_BY_ID[it.id]=it; }); });
@@ -680,7 +679,10 @@ function blankState(){
 var state = blankState();
 
 /* ---------------- scoring ---------------- */
-function awarded(id){ var b=state.ratings[id]; if(b==null) return 0; return ITEM_BY_ID[id].max * RATING[b]/8; }
+function awarded(id){ var b=state.ratings[id], it=ITEM_BY_ID[id]; if(b==null||!it||!it.bands[b]) return 0; return it.bands[b].mark; }
+function fmtPts(x){ return (Math.round(x*100)/100).toString(); }                 // 2.5 -> "2.5", 10 -> "10"
+function ratingWord(mark,max){ if(!max||max<=0) return ""; var p=mark/max; return p>=1?"Excellent":p>=0.75?"Good":p>=0.5?"Average":p>0?"Poor":"Very poor"; }
+function bandColor(bi,n){ return n<=1?2:Math.round(bi/(n-1)*4); }                 // map any band position onto the b0..b4 colour ramp
 function total(){ var s=0; for(var id in ITEM_BY_ID) s+=awarded(id); return s; }
 function scoredCount(){ var n=0; for(var id in ITEM_BY_ID) if(state.ratings[id]!=null) n++; return n; }
 function totalCount(){ return Object.keys(ITEM_BY_ID).length; }
@@ -760,8 +762,8 @@ function escFilled(e){
 var STEPS = [
   {key:"info",  label:"Supplier"},
   {key:"pq",    label:"Product Quality"},
-  {key:"pc",    label:"Process Quality"},
-  {key:"ne",    label:"NCR Effectiveness"},
+  {key:"pc",    label:"Delivery & Service"},
+  {key:"ne",    label:"Compliance & NCRs"},
   {key:"esc",   label:"Escalation"},
   {key:"evi",   label:"Evidence & notes"},
   {key:"rev",   label:"Review & generate"}
@@ -788,30 +790,18 @@ function renderSteps(){
 function indicatorHTML(it, n){
   var sel=state.ratings[it.id];
   var pts=(sel!=null)?awarded(it.id).toFixed(1):"\u2013";
-  if(it.critical){
-    var v=state.ratings[it.id];
-    return '<div class="indicator" data-id="'+it.id+'">'
-      +'<div class="ind-top"><span class="ind-no">'+n+'</span>'
-      +'<div><div class="ind-name">'+esc(it.name)+'</div>'
-      +'<div class="ind-meta">Knock-out criterion \u00B7 worth '+it.max+' pts \u00B7 any violation forces a Red Card</div></div>'
-      +'<div class="ind-pts"><div class="v">'+pts+'</div><div class="l">/ '+it.max+'</div></div></div>'
-      +'<div class="bi">'
-      +'<button class="ok" data-crit="4" data-sel="'+(v===4?1:0)+'"><span class="dot"></span>Zero findings (compliant)</button>'
-      +'<button class="bad" data-crit="0" data-sel="'+(v===0?1:0)+'"><span class="dot"></span>Violation found</button>'
-      +'</div>'+noteHTML(it)+'</div>';
-  }
-  var bands=it.bands.map(function(lab,bi){
-    if(!lab) return "";
-    return '<button class="band b'+bi+'" data-band="'+bi+'" data-sel="'+(sel===bi?1:0)+'">'
-      +'<div class="scale">'+esc(SCALE[bi])+'</div>'
-      +'<div class="lab">'+esc(lab)+'</div>'
-      +'<div class="mk">'+(it.max*RATING[bi]/8)+' pts</div></button>';
+  var nb=it.bands.length;
+  var bands=it.bands.map(function(band,bi){
+    return '<button class="band b'+bandColor(bi,nb)+'" data-band="'+bi+'" data-sel="'+(sel===bi?1:0)+'">'
+      +'<div class="scale">'+esc(ratingWord(band.mark,it.max))+'</div>'
+      +'<div class="lab">'+esc(band.label)+'</div>'
+      +'<div class="mk">'+fmtPts(band.mark)+' pts</div></button>';
   }).join("");
   return '<div class="indicator" data-id="'+it.id+'">'
     +'<div class="ind-top"><span class="ind-no">'+n+'</span>'
     +'<div><div class="ind-name">'+esc(it.name)+'</div>'
-    +'<div class="ind-meta">Worth '+it.max+' pts \u00B7 select the band that matches this month</div></div>'
-    +'<div class="ind-pts"><div class="v">'+pts+'</div><div class="l">/ '+it.max+'</div></div></div>'
+    +'<div class="ind-meta">Worth '+fmtPts(it.max)+' pts \u00B7 select the band that matches this month</div></div>'
+    +'<div class="ind-pts"><div class="v">'+pts+'</div><div class="l">/ '+fmtPts(it.max)+'</div></div></div>'
     +'<div class="bands">'+bands+'</div>'+noteHTML(it)+'</div>';
 }
 function noteHTML(it){
@@ -917,8 +907,7 @@ function revPanel(){
   var rows=CRITERIA.map(function(c){
     return c.items.map(function(it){
       var b=state.ratings[it.id];
-      var band = it.critical ? (b===4?"Zero findings":b===0?"Violation":"\u2013")
-                : (b!=null?(SCALE[b]+" \u2014 "+it.bands[b]):"<span style='color:var(--red)'>not scored</span>");
+      var band = (b!=null && it.bands[b]) ? (ratingWord(it.bands[b].mark,it.max)+" \u2014 "+it.bands[b].label) : "<span style='color:var(--red)'>not scored</span>";
       return '<tr><td style="font-size:12.5px">'+esc(it.name)+'</td><td>'+band+'</td>'
         +'<td class="num">'+(b!=null?awarded(it.id).toFixed(1):"\u2013")+'</td></tr>';
     }).join("");
@@ -1003,15 +992,14 @@ function renderReport(){
     var head='<tr class="catrow"><td colspan="5">'+esc(cat.cat)+'</td></tr>';
     var body=cat.items.map(function(it){
       var b=state.ratings[it.id];
-      var bandLab = it.critical ? (b===4?"Zero findings":b===0?"Violation found":"\u2013")
-                  : (b!=null? it.bands[b] : "\u2013");
-      var scaleLab = b!=null ? SCALE[b] : "Not scored";
-      var cls = b===0?"b0":b===4?"b4":"";
+      var bandLab = (b!=null && it.bands[b]) ? it.bands[b].label : "\u2013";
+      var scaleLab = (b!=null && it.bands[b]) ? ratingWord(it.bands[b].mark,it.max) : "Not scored";
+      var cls = (b!=null && it.bands[b]) ? (it.bands[b].mark<=0?"b0":(it.bands[b].mark>=it.max?"b4":"")) : "";
       return '<tr class="'+cls+'"><td>'+esc(it.name)+'</td>'
         +'<td class="bandtag">'+esc(scaleLab)+'</td>'
         +'<td>'+esc(bandLab)+'</td>'
         +'<td class="num">'+(b!=null?awarded(it.id).toFixed(1):"\u2013")+'</td>'
-        +'<td class="num">'+it.max+'</td></tr>'
+        +'<td class="num">'+fmtPts(it.max)+'</td></tr>'
         + (state.notes[it.id]&&state.notes[it.id].trim() ? '<tr><td class="obs" colspan="5" style="padding-top:0;color:#5b6675;font-size:12.5px">\u21B3 '+esc(state.notes[it.id])+'</td></tr>' : '');
     }).join("");
     return head+body;
@@ -1259,7 +1247,7 @@ el("steps").addEventListener("click",function(e){ var b=e.target.closest("[data-
 el("panel").addEventListener("click",function(e){
   var t=e.target;
   var band=t.closest("[data-band]"); if(band){ var ind=band.closest(".indicator"); state.ratings[ind.dataset.id]=+band.dataset.band; renderAll(); return; }
-  var crit=t.closest("[data-crit]"); if(crit){ var ind2=crit.closest(".indicator"); var v=+crit.dataset.crit; state.ratings[ind2.dataset.id]=v; if(ind2.dataset.id==="pq2") state.esc.critical=(v===0); renderAll(); return; }
+  var crit=t.closest("[data-crit]"); if(crit){ var ind2=crit.closest(".indicator"); var v=+crit.dataset.crit; state.ratings[ind2.dataset.id]=v; renderAll(); return; }
   var occ=t.closest("[data-occ]"); if(occ){ state.esc.occurrence=occ.dataset.occ; renderAll(); return; }
   var nav=t.closest("[data-nav]"); if(nav){ state.step=Math.max(0,Math.min(STEPS.length-1,state.step+ (+nav.dataset.nav))); renderAll(); window.scrollTo({top:0,behavior:"smooth"}); return; }
   var actrm=t.closest("[data-actrm]"); if(actrm){ state.esc.actions.splice(+actrm.dataset.actrm,1); renderPanel(); return; }
@@ -1395,7 +1383,7 @@ var MONTHS_ABBR=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","No
 var dash={ view:"home", supplier:null, year:"all", homeYear:"all" };
 
 /* pure scoring on a stored record's data (independent of the live editor state) */
-function dAwarded(data,id){ var b=(data.ratings||{})[id]; if(b==null) return 0; return ITEM_BY_ID[id].max*RATING[b]/8; }
+function dAwarded(data,id){ var b=(data.ratings||{})[id], it=ITEM_BY_ID[id]; if(b==null||!it||!it.bands[b]) return 0; return it.bands[b].mark; }
 function dTotal(data){ var s=0; for(var id in ITEM_BY_ID) s+=dAwarded(data,id); return s; }
 function dCatTotals(data){ return CRITERIA.map(function(c){ var got=0,mx=0; c.items.forEach(function(it){ mx+=it.max; got+=dAwarded(data,it.id); }); return {cat:c.cat,got:got,max:mx,pct:mx?got/mx*100:0}; }); }
 function dFinalCard(data){
