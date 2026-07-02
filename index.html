@@ -616,16 +616,14 @@ function authError(){ authClear(); updateAuthUI(); updateCloudStatus("auth"); sh
    the maximum of each indicator equals its Weight column; the maxima sum to 100.            */
 var CRITERIA = [
   { cat:"Product Quality", items:[
-    { id:"defect", name:"Defect rate %", max:10,
-      bands:[{label:">5%",mark:0},{label:"3\u20135%",mark:2.5},{label:"2\u20133%",mark:5},{label:"1\u20132%",mark:7.5},{label:"<1%",mark:10}] },
-    { id:"severity", name:"Severity of defect", max:20,
-      bands:[{label:"Critical",mark:0},{label:"Major",mark:10},{label:"Minor",mark:20}] }
+    { id:"severity", name:"Severity of defect", max:25,
+      bands:[{label:"Critical (\u221225)",mark:0},{label:"Major (\u221220)",mark:5},{label:"Minor (\u221210)",mark:15},{label:"No defect",mark:25}] }
   ]},
   { cat:"Delivery & Service", items:[
     { id:"otif", name:"OTIF (on time, in full)", max:30,
       bands:[{label:"Below 90%",mark:0},{label:"90\u201395%",mark:10},{label:"95\u201398%",mark:20},{label:"98\u201399%",mark:25},{label:"100%",mark:30}] },
-    { id:"ncrtime", name:"NCR closure timeline", max:5,
-      bands:[{label:">10 days",mark:0},{label:"<10 days",mark:5}] }
+    { id:"ncrtime", name:"NCR closure timeline", max:10,
+      bands:[{label:">10 days",mark:0},{label:"<10 days",mark:10}] }
   ]},
   { cat:"Compliance & NCRs", items:[
     { id:"repeat", name:"Repeat NCRs", max:15,
@@ -633,7 +631,7 @@ var CRITERIA = [
     { id:"audit", name:"Annual audit score", max:10,
       bands:[{label:"<80",mark:0},{label:"80\u201385",mark:4},{label:"85\u201390",mark:6},{label:"90\u201395",mark:8},{label:">95",mark:10}] },
     { id:"escard", name:"Red / Yellow card escalations", max:10,
-      bands:[{label:"Red card issued",mark:0},{label:"Yellow card issued",mark:3},{label:"No card",mark:10}] }
+      bands:[{label:"Red card (\u221210)",mark:0},{label:"Yellow card (\u22127)",mark:3},{label:"No card",mark:10}] }
   ]}
 ];
 var ITEM_BY_ID = {}; CRITERIA.forEach(function(c){ c.items.forEach(function(it){ it.cat=c.cat; ITEM_BY_ID[it.id]=it; }); });
